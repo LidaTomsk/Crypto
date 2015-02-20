@@ -4,11 +4,11 @@
   <PropertyGroup>
     <Configuration Condition=" '$(Configuration)' == '' ">Debug</Configuration>
     <Platform Condition=" '$(Platform)' == '' ">AnyCPU</Platform>
-    <ProjectGuid>{072C8905-A3A8-4872-8416-0E23CFDD59FA}</ProjectGuid>
+    <ProjectGuid>{1F97E0EE-6756-44EF-9BA8-1D562A7F0ED8}</ProjectGuid>
     <OutputType>Exe</OutputType>
     <AppDesignerFolder>Properties</AppDesignerFolder>
-    <RootNamespace>Crypto</RootNamespace>
-    <AssemblyName>Crypto</AssemblyName>
+    <RootNamespace>Des</RootNamespace>
+    <AssemblyName>Des</AssemblyName>
     <TargetFrameworkVersion>v4.5.1</TargetFrameworkVersion>
     <FileAlignment>512</FileAlignment>
     <AutoGenerateBindingRedirects>true</AutoGenerateBindingRedirects>
