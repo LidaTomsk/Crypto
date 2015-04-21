@@ -1,12 +1,11 @@
 ﻿using System;
-using System.Collections;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
-using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 
-namespace Des
+namespace Crypto.Des
 {
     class DesEncoder
     {
@@ -153,7 +152,7 @@ namespace Des
             Debug.WriteLine(outputStr);
         }
 
-        private ulong ShuffleUsingVector(ulong number, byte[] shuffleVector)
+        private static ulong ShuffleUsingVector(ulong number, byte[] shuffleVector)
         {
             ulong res = 0;
             for (int i = 0; i < shuffleVector.Length; i++)
@@ -170,6 +169,7 @@ namespace Des
 
         private ulong TransformRightBits(ulong right, ulong key)
         {
+
             var extendedRight = ProjectUsingVector(right, _extendArray);
             var xoredRight = extendedRight ^ key;
 
@@ -202,7 +202,7 @@ namespace Des
             return resRightVal;
         }
 
-        private ulong ProjectUsingVector(ulong vector, byte[] projectVector)
+        private static ulong ProjectUsingVector(ulong vector, byte[] projectVector)
         {
             ulong res = 0;
             for (int i = 0; i < projectVector.Length; i++)
@@ -216,13 +216,7 @@ namespace Des
 
         public ulong[] GenerateKey(byte[] keyBytes)
         {
-            //var res = new byte[8];
-            //var rand = new Random(0);
-            //rand.NextBytes(res);
-
             var key = BitConverter.ToUInt64(keyBytes, 0);
-            OutputBinary(key, 64);
-            // 1101 1000 1110 0100 0111 0101 0101 1101 0110 1111 0100 0110 0000 1100 0001 1010
 
             ulong modKey = 0;
             ulong modBit = 0;
@@ -245,21 +239,12 @@ namespace Des
                 }
             }
 
-            OutputBinary(modKey, 64);
-            // 0101 1000 0110 0100 0111 0101 0101 1101 1110 1111 0100 0110 1000 1100 0001 1010 
-
             // переставляем
             var shuffledKey = ProjectUsingVector(modKey, _c0d0Array);
 
-            OutputBinary(shuffledKey, 56);
-            // 1011 1010 1111 1100 1001 0110 1100 0010 0001 0000 1111 1000 1000 0100
-
             // разбиваем на 2 части
-            ulong c0 = (shuffledKey >> 28) & 0xfffffff; // 28 старших бит
-            ulong d0 = shuffledKey & 0xfffffff; // низшие 28 бит
-
-            OutputBinary(c0, 28);
-            OutputBinary(d0, 28);
+            var c0 = (shuffledKey >> 28) & 0xfffffff; // 28 старших бит
+            var d0 = shuffledKey & 0xfffffff; // низшие 28 бит
 
             var keys = new ulong[16]; // 16 ключей по 48 бит
 
@@ -283,57 +268,66 @@ namespace Des
                     if (bitAtD0WithShift == 1) d0 |= 1ul << j;
                 }
 
-                OutputBinary(c0, 28);
-                OutputBinary(d0, 28);
-
                 // соединяем
-                ulong curKeyConcat = (c0 << 28) | d0;
-                OutputBinary(curKeyConcat, 56);
-
+                var curKeyConcat = (c0 << 28) | d0;
                 // вычленяем 48 бит
                 var curKey = ProjectUsingVector(curKeyConcat, _c0d0ShuffleArray);
-                OutputBinary(curKey, 48);
-
                 // сохраняем ключ
                 keys[i] = curKey;
             }
 
             return keys;
         }
-
+        
         public byte[] Encode(byte[] data, byte[] key)
         {
-            var result = new List<byte>(data.Length);
-
             var keys = GenerateKey(key);
             var partsCount = data.Length / 8;
             if (data.Length % 8 != 0) partsCount++;
-            for (int i = 0; i < partsCount; i++)
+
+            var filledData = new byte[partsCount*8];
+            data.CopyTo(filledData, 0);
+            data = filledData;
+            
+            const int threadsCount = 4;
+            var onePart = partsCount/threadsCount;
+
+            var items =
+                ParallelEnumerable.Range(0, threadsCount)
+                    .AsOrdered()
+                    .Select(i => WorkOnDataBlock(onePart, i, ref data, ref keys))
+                    .ToList();
+
+            filledData = new byte[items.Sum(x => x.Length)];
+            var offset = 0;
+            foreach (var array in items)
             {
-                ulong partData;
-                if (data.Length % 8 != 0 && i == partsCount-1)
-                {
-                    var bytesToHandle = new byte[8];
-                    for (int j = i*8, k = 0; j < data.Length; j++, k++)
-                    {
-                        bytesToHandle[k] = data[j];
-                    }
-                    partData = BitConverter.ToUInt64(bytesToHandle, 0);
-                }
-                else
-                {
-                    partData = BitConverter.ToUInt64(data, i * 8);
-                }
-                // разбить по 64
-                OutputBinary(partData, 64);
+                Buffer.BlockCopy(array, 0, filledData, offset, array.Length);
+                offset += array.Length;
+            }
+
+            return filledData;
+        }
+
+        private byte[] WorkOnDataBlock(int onePart, int i, ref byte[] data, ref ulong[] keys)
+        {
+            var start = onePart * i;
+            var end = start + onePart;
+            var curBytes = new byte[onePart * 8];
+            if (i == 3) // todo: костылик - надо пофиксить
+            {
+                var oldEnd = end;
+                end = data.Length / 8;
+                var diff = end - oldEnd;
+                curBytes = new byte[curBytes.Length + diff*8];
+            }
+            for (var cur = start; cur < end; cur++)
+            {
+                var partData = BitConverter.ToUInt64(data, cur * 8);
                 var shuffledData = ShuffleUsingVector(partData, _ipArray);
-                OutputBinary(shuffledData, 64);
 
                 var left32Bits = shuffledData >> 32;
                 var right32Bits = shuffledData & uint.MaxValue;
-
-                OutputBinary(left32Bits, 32);
-                OutputBinary(right32Bits, 32);
 
                 // 16 циклов фейстеля
                 for (int j = 0; j < 16; j++)
@@ -348,49 +342,34 @@ namespace Des
                 var concatedVal = (right32Bits << 32) | left32Bits;
                 var resVal = ShuffleUsingVector(concatedVal, _ip1Array);
                 var resAsBytes = BitConverter.GetBytes(resVal);
-                result.AddRange(resAsBytes);
+                resAsBytes.CopyTo(curBytes, (cur - start) * 8);
             }
-            
-            return result.ToArray();
+            return curBytes;
         }
 
         public byte[] Decode(byte[] data, byte[] key)
         {
-            var result = new List<byte>(data.Length);
-            
-            var keys = GenerateKey(key);
-            var partsCount = data.Length / 8;
-            if (data.Length % 8 != 0) partsCount++;
-            for (int i = 0; i < partsCount; i++)
+            var keys = GenerateKey(key).Reverse().ToArray();
+
+            const int threadsCount = 4;
+            var partsCount = data.Length/8;
+            var onePart = partsCount / threadsCount;
+
+            var items =
+                ParallelEnumerable.Range(0, threadsCount)
+                    .AsOrdered()
+                    .Select(i => WorkOnDataBlock(onePart, i, ref data, ref keys))
+                    .ToList();
+
+            var filledData = new byte[items.Sum(x => x.Length)];
+            var offset = 0;
+            foreach (var array in items)
             {
-                // разбить по 64
-                var partData = BitConverter.ToUInt64(data, i * 8);
-                var shuffledData = ShuffleUsingVector(partData, _ipArray);
-                OutputBinary(shuffledData, 64);
-
-                var left32Bits = shuffledData >> 32;
-                var right32Bits = shuffledData & uint.MaxValue;
-
-                OutputBinary(left32Bits, 32);
-                OutputBinary(right32Bits, 32);
-
-                // 16 циклов фейстеля
-                for (int j = 0; j < 16; j++)
-                {
-                    var temp = left32Bits;
-                    left32Bits = right32Bits;
-
-                    var rightTransformed = TransformRightBits(right32Bits, keys[15 - j]);
-                    right32Bits = temp ^ rightTransformed;
-                }
-
-                var concatedVal = (right32Bits << 32) | left32Bits;
-                var resVal = ShuffleUsingVector(concatedVal, _ip1Array);
-                var resAsBytes = BitConverter.GetBytes(resVal);
-                result.AddRange(resAsBytes);
+                Buffer.BlockCopy(array, 0, filledData, offset, array.Length);
+                offset += array.Length;
             }
 
-            return result.ToArray();
+            return filledData;
         }
     }
 }
